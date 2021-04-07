@@ -6,7 +6,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Text;
 
-namespace ProxySU_Core.ViewModels.Developers
+namespace ProxySU_Core.Models.Developers
 {
     public class ConfigBuilder
     {
@@ -25,11 +25,18 @@ namespace ProxySU_Core.ViewModels.Developers
         private const string ServerReverseDir = @"Templates\xray\server\09_reverse";
         private const string CaddyFileDir = @"Templates\xray\caddy";
 
-        public const int VLESS_TCP_Port = 1110;
-        public const int VLESS_WS_Port = 1111;
-        public const int VMESS_TCP_Port = 2110;
-        public const int VMESS_WS_Port = 2111;
-        public const int Trojan_TCP_Port = 3110;
+        public static int VLESS_TCP_Port = 1110;
+        public static int VLESS_WS_Port = 1111;
+        public static int VLESS_H2_Port = 1112;
+        public static int VLESS_mKCP_Port = 1113;
+
+        public static int VMESS_TCP_Port = 1210;
+        public static int VMESS_WS_Port = 1211;
+        public static int VMESS_H2_Port = 1212;
+
+        public static int Trojan_TCP_Port = 1310;
+        public static int Trojan_WS_Port = 1311;
+
 
 
         public static dynamic LoadXrayConfig()
@@ -64,9 +71,28 @@ namespace ProxySU_Core.ViewModels.Developers
         {
             var caddyStr = File.ReadAllText(Path.Combine(CaddyFileDir, "base.caddyfile"));
             caddyStr = caddyStr.Replace("##domain##", parameters.Domain);
+
+            if (parameters.Port != 443)
+            {
+                caddyStr = caddyStr.Replace(":##port##", "");
+            }
+            else
+            {
+                caddyStr = caddyStr.Replace("##port##", 80.ToString());
+            }
+
             if (!useCustomWeb && !string.IsNullOrEmpty(parameters.MaskDomain))
             {
-                caddyStr = caddyStr.Replace("##reverse_proxy##", $"reverse_proxy {parameters.MaskDomain} {{ header_up Host {parameters.MaskDomain} }}");
+                var prefix = "http://";
+                if (parameters.MaskDomain.StartsWith("https://"))
+                {
+                    prefix = "https://";
+                }
+                var domain = parameters.MaskDomain
+                    .TrimStart("http://".ToCharArray())
+                    .TrimStart("https://".ToCharArray());
+
+                caddyStr = caddyStr.Replace("##reverse_proxy##", $"reverse_proxy {prefix}{domain} {{ \n        header_up Host {domain} \n    }}");
             }
             else
             {
@@ -79,25 +105,18 @@ namespace ProxySU_Core.ViewModels.Developers
         public static string BuildXrayConfig(XraySettings parameters)
         {
             var xrayConfig = LoadXrayConfig();
-            var baseBound = LoadJsonObj(Path.Combine(ServerInboundsDir, "VLESS_TCP_XTLS.json"));
+            var baseBound = GetBound("VLESS_TCP_XTLS.json");
             baseBound.port = parameters.Port;
             baseBound.settings.fallbacks.Add(JToken.FromObject(new
             {
-                dest = 80,
-                xver = 1,
+                dest = 80
             }));
             xrayConfig.inbounds.Add(baseBound);
+            baseBound.settings.clients[0].id = parameters.UUID;
 
-            if (parameters.Types.Contains(XrayType.VLESS_TCP_XTLS))
+            if (parameters.Types.Contains(XrayType.VLESS_WS))
             {
-                baseBound.settings.clients[0].id = parameters.UUID;
-            }
-
-            if (parameters.Types.Contains(XrayType.VLESS_WS_TLS))
-            {
-                baseBound.settings.clients[0].id = parameters.UUID;
-
-                var wsInbound = LoadJsonObj(Path.Combine(ServerInboundsDir, "VLESS_WS_TLS.json"));
+                var wsInbound = GetBound("VLESS_WS.json");
                 wsInbound.port = VLESS_WS_Port;
                 wsInbound.settings.clients[0].id = parameters.UUID;
                 wsInbound.streamSettings.wsSettings.path = parameters.VLESS_WS_Path;
@@ -110,9 +129,9 @@ namespace ProxySU_Core.ViewModels.Developers
                 xrayConfig.inbounds.Add(JToken.FromObject(wsInbound));
             }
 
-            if (parameters.Types.Contains(XrayType.VMESS_TCP_TLS))
+            if (parameters.Types.Contains(XrayType.VMESS_TCP))
             {
-                var mtcpBound = LoadJsonObj(Path.Combine(ServerInboundsDir, "VMESS_TCP_TLS.json"));
+                var mtcpBound = GetBound("VMESS_TCP.json");
                 mtcpBound.port = VMESS_TCP_Port;
                 mtcpBound.settings.clients[0].id = parameters.UUID;
                 mtcpBound.streamSettings.tcpSettings.header.request.path = parameters.VMESS_TCP_Path;
@@ -125,9 +144,9 @@ namespace ProxySU_Core.ViewModels.Developers
                 xrayConfig.inbounds.Add(JToken.FromObject(mtcpBound));
             }
 
-            if (parameters.Types.Contains(XrayType.VMESS_WS_TLS))
+            if (parameters.Types.Contains(XrayType.VMESS_WS))
             {
-                var mwsBound = LoadJsonObj(Path.Combine(ServerInboundsDir, "VMESS_WS_TLS.json"));
+                var mwsBound = GetBound("VMESS_WS.json");
                 mwsBound.port = VMESS_WS_Port;
                 mwsBound.settings.clients[0].id = parameters.UUID;
                 mwsBound.streamSettings.wsSettings.path = parameters.VMESS_WS_Path;
@@ -140,9 +159,9 @@ namespace ProxySU_Core.ViewModels.Developers
                 xrayConfig.inbounds.Add(JToken.FromObject(mwsBound));
             }
 
-            if (parameters.Types.Contains(XrayType.Trojan_TCP_TLS))
+            if (parameters.Types.Contains(XrayType.Trojan_TCP))
             {
-                var trojanTcpBound = LoadJsonObj(Path.Combine(ServerInboundsDir, "Trojan_TCP_TLS.json"));
+                var trojanTcpBound = GetBound("Trojan_TCP.json");
                 trojanTcpBound.port = Trojan_TCP_Port;
                 trojanTcpBound.settings.clients[0].password = parameters.TrojanPassword;
                 baseBound.settings.fallbacks[0] = JToken.FromObject(new
@@ -153,6 +172,26 @@ namespace ProxySU_Core.ViewModels.Developers
                 xrayConfig.inbounds.Add(JToken.FromObject(trojanTcpBound));
             }
 
+            if (parameters.Types.Contains(XrayType.VMESS_KCP))
+            {
+                var kcpBound = GetBound("VMESS_KCP.json");
+                kcpBound.port = parameters.KcpPort;
+                kcpBound.settings.clients[0].id = parameters.UUID;
+                kcpBound.streamSettings.kcpSettings.header.type = parameters.VMESS_KCP_Type;
+                kcpBound.streamSettings.kcpSettings.seed = parameters.VMESS_KCP_Seed;
+                xrayConfig.inbounds.Add(JToken.FromObject(kcpBound));
+            }
+
+
+            if (parameters.Types.Contains(XrayType.ShadowsocksAEAD))
+            {
+                var ssBound = GetBound("Shadowsocks-AEAD.json");
+                ssBound.port = parameters.ShadowSocksPort;
+                ssBound.settings.clients[0].password = parameters.ShadowsocksPassword;
+                ssBound.settings.clients[0].method = parameters.ShadowsocksMethod;
+                xrayConfig.inbounds.Add(JToken.FromObject(ssBound));
+            }
+
             return JsonConvert.SerializeObject(
                 xrayConfig,
                 Formatting.Indented,
@@ -160,6 +199,11 @@ namespace ProxySU_Core.ViewModels.Developers
                 {
                     NullValueHandling = NullValueHandling.Ignore
                 });
+        }
+
+        private static dynamic GetBound(string name)
+        {
+            return LoadJsonObj(Path.Combine(ServerInboundsDir, name));
         }
 
         private static dynamic LoadJsonObj(string path)
